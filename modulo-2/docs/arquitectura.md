@@ -40,18 +40,25 @@ export type EstadoMatricula = MatriculaActiva | MatriculaSuspendida | MatriculaF
 - La propiedad `tipo` actúa como **discriminante** (tagged union), permitiendo a TypeScript estrechar el tipo de forma 100% segura en tiempo de compilación.
 - Cada variante tiene propiedades específicas que solo existen cuando corresponde su estado.
 
-**Ejemplo de narrowing:**
+**Interfaces de la unión:**
 ```typescript
-function procesar(estado: EstadoMatricula) {
-  if (estado.tipo === "ACTIVA") {
-    // TypeScript sabe que estado.asignaturas existe aquí
-  }
+interface MatriculaActiva {
+  tipo: "ACTIVA";
+  asignaturas: Asignatura[];
+}
+
+interface MatriculaSuspendida {
+  tipo: "SUSPENDIDA";
+  motivo: string;
+}
+
+interface MatriculaFinalizada {
+  tipo: "FINALIZADA";
+  notaMedia: number;
 }
 ```
 
-## Servicio Genérico - APIClient
-
-### Interfaz Genérica RespuestaAPI
+### Interfaz Genérica - RespuestaAPI
 
 ```typescript
 export interface RespuestaAPI<T> {
@@ -73,24 +80,112 @@ const respuesta: RespuestaAPI<Estudiante> = await apiClient.obtenerRecurso('/est
 // respuesta.datos es de tipo Estudiante
 ```
 
+## Servicio Genérico - APIClient
+
 ### Clase APIClient
 
 ```typescript
 export class APIClient {
   async obtenerRecurso<T>(endpoint: string): Promise<RespuestaAPI<T>> { ... }
+  async listarRecursos<T>(endpoint: string): Promise<RespuestaAPI<T[]>> { ... }
 }
 ```
 
 **Decisiones de diseño:**
-- **Clase vs módulo de funciones:** La clase permite mantener estado (baseUrl) y es más fácil de inyectar como dependencia.
+- **Clase vs módulo de funciones:** La clase permite mantener estado (baseUrl, datos simulados) y es más fácil de inyectar como dependencia.
 - **Método genérico:** `<T>` parametrizable permite reutilizar la lógica para cualquier endpoint.
-- **Promesas con setTimeout:** Simula el comportamiento real de una API asíncrona.
+- **Simulación de API:** Usa `setTimeout` para simular latencia real.
+- **Almacenamiento en Map:** Permite guardar y recuperar entidades por endpoint.
 
-## Resumen de decisiones arquitectónicas
+### Métodos
+
+| Método | Descripción |
+|--------|-------------|
+| `obtenerRecurso<T>(endpoint)` | Obtiene un recurso específico |
+| `listarRecursos<T>(endpoint)` | Lista recursos que empiezan por el endpoint |
+
+### Manejo de Errores
+
+La API retorna errores con código 404 cuando el recurso no existe:
+
+```typescript
+{
+  codigoEstado: 404,
+  exito: false,
+  datos: null,
+  errores: ["Recurso no encontrado: /estudiantes/NO-EXISTE"]
+}
+```
+
+## Análisis Exhaustivo con `never`
+
+La función `generarReporte` implementa el patrón de **exhaustive checking**:
+
+```typescript
+export function generarReporte(estado: EstadoMatricula): string {
+  switch (estado.tipo) {
+    case "ACTIVA": {
+      const nombres = estado.asignaturas.map(a => a.nombre).join(', ');
+      return `Matrícula ACTIVA. Asignaturas matriculadas: ${nombres}`;
+    }
+    case "SUSPENDIDA": {
+      return `Matrícula SUSPENDIDA. Motivo: ${estado.motivo}`;
+    }
+    case "FINALIZADA": {
+      return `Matrícula FINALIZADA. Nota media: ${estado.notaMedia}`;
+    }
+    default: {
+      const _exhaustivo: never = estado;
+      return _exhaustivo;
+    }
+  }
+}
+```
+
+**Beneficios:**
+- **Type narrowing:** No requiere `as` - TypeScript infiere automáticamente el tipo dentro de cada case.
+- **Seguridad futura:** Si se añade un nuevo tipo a `EstadoMatricula` sin actualizar esta función, el compilador mostrará un error.
+- **Mantenibilidad:** Garantiza que ningún caso queda sin manejar.
+
+## Resumen de Decisiones Arquitectónicas
 
 | Concepto | Elección | Razón |
 |----------|----------|-------|
 | Entidades (Estudiante, Asignatura) | `interface` | Contratos estructurales, permite extensión |
 | EstadoMatricula | `type` (unión) | Unión de tipos, no posible con interface |
+| generarReporte | switch + never | Exhaustiveness checking para escalabilidad |
 | RespuestaAPI | `interface` + genérico `<T>` | Reutilizable para cualquier entidad |
-| APIClient | `class` | Estado reutilizable, inyección de dependencias |
+| APIClient | `class` con Map | Estado reutilizable, inyección de dependencias |
+
+## Ejemplo Completo de Uso
+
+```typescript
+import { apiClient } from './services/api-client';
+import { Estudiante, Asignatura } from './domain/types';
+import { MatriculaActiva, MatriculaFinalizada } from './domain/types/matricula';
+import { generarReporte } from './domain/types/reporte';
+
+// Obtener recurso
+const estudiante = await apiClient.obtenerRecurso<Estudiante>('/estudiantes/EST-001');
+console.log(estudiante.datos);
+
+// Listar recursos
+const asignaturas = await apiClient.listarRecursos<Asignatura>('/asignaturas');
+
+// Generar reporte
+const matricula: MatriculaFinalizada = { tipo: "FINALIZADA", notaMedia: 8.5 };
+console.log(generarReporte(matricula));
+```
+
+## Compilación y Ejecución
+
+```bash
+# Compilar
+npx tsc
+
+# Ejecutar directamente
+npx tsx src/index.ts
+
+# Verificar tipos sin compilar
+npx tsc --noEmit
+```
